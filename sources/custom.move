@@ -12,6 +12,7 @@ module custom::aptos_token {
     use std::string::String;
     use std::signer;
     use aptos_framework::object::{Self, ConstructorRef, Object};
+    use aptos_framework::timestamp;
     use aptos_token_objects::collection;
     use aptos_token_objects::property_map;
     use aptos_token_objects::royalty;
@@ -29,6 +30,8 @@ module custom::aptos_token {
     const ETOKEN_NOT_BURNABLE: u64 = 5;
     /// The property map being mutated is not mutable
     const EPROPERTIES_NOT_MUTABLE: u64 = 6;
+    /// Cannot buy nft because sale time is not yet
+    const ESALE_UNACTIVAE_TIME: u64 = 7;
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     /// Storage state for managing the no-code Collection.
@@ -53,6 +56,22 @@ module custom::aptos_token {
         tokens_burnable_by_creator: bool,
         /// Determines if the creator can freeze tokens
         tokens_freezable_by_creator: bool,
+        /// Used to store token name
+        symbol: String,
+        /// Used to store token uri
+        token_uri: String,
+        /// Used to store mint limit per each transaction
+        mint_per_tx: u64,
+        /// Used to store mint fee per each nft
+        mint_fee: u64,
+        /// Used to store dev fee per each nft
+        dev_fee: u64,
+        /// Used to store withdraw wallet address
+        withdraw_wallet: String,
+        /// Used to store dev wallet address
+        dev_wallet: String,
+        /// Used to store sale time
+        sale_time: u64,
     }
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
@@ -72,38 +91,57 @@ module custom::aptos_token {
     public entry fun create_collection(
         creator: &signer,
         description: String,
-        max_supply: u64,
         name: String,
+        symbol: String,
         uri: String,
-        mutable_description: bool,
-        mutable_royalty: bool,
-        mutable_uri: bool,
-        mutable_token_description: bool,
-        mutable_token_name: bool,
-        mutable_token_properties: bool,
-        mutable_token_uri: bool,
-        tokens_burnable_by_creator: bool,
-        tokens_freezable_by_creator: bool,
-        royalty_numerator: u64,
-        royalty_denominator: u64,
+        token_uri: String,
+        mint_per_tx: u64,
+        mint_fee: u64,
+        dev_fee: u64,
+        supply_limit: u64,
+        withdraw_wallet: String,
+        dev_wallet: String,
+        sale_time: u64,
+        // mutable_description: bool,
+        // mutable_token_name: bool,
+        // mutable_token_symbol: bool,
+        // mutable_uri: bool,
+        // mutable_token_uri: bool,
+        // mutable_mint_per_tx: bool,
+
+        // mutable_royalty: bool,
+        // mutable_token_description: bool,
+        // mutable_token_properties: bool,
+        // tokens_burnable_by_creator: bool,
+        // tokens_freezable_by_creator: bool,
+        // royalty_numerator: u64,
+        // royalty_denominator: u64,
     ) {
         create_collection_object(
             creator,
             description,
-            max_supply,
+            supply_limit,
             name,
             uri,
-            mutable_description,
-            mutable_royalty,
-            mutable_uri,
-            mutable_token_description,
-            mutable_token_name,
-            mutable_token_properties,
-            mutable_token_uri,
-            tokens_burnable_by_creator,
-            tokens_freezable_by_creator,
-            royalty_numerator,
-            royalty_denominator
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            0,
+            1,
+            symbol,
+            token_uri,
+            mint_per_tx,
+            mint_fee,
+            dev_fee,
+            withdraw_wallet,
+            dev_wallet,
+            sale_time,
         );
     }
 
@@ -124,6 +162,14 @@ module custom::aptos_token {
         tokens_freezable_by_creator: bool,
         royalty_numerator: u64,
         royalty_denominator: u64,
+        symbol: String,
+        token_uri: String,
+        mint_per_tx: u64,
+        mint_fee: u64,
+        dev_fee: u64,
+        withdraw_wallet: String,
+        dev_wallet: String,
+        sale_time: u64,
     ): Object<AptosCollection> {
         let creator_addr = signer::address_of(creator);
         let royalty = royalty::create(royalty_numerator, royalty_denominator, creator_addr);
@@ -160,11 +206,35 @@ module custom::aptos_token {
             mutable_token_uri,
             tokens_burnable_by_creator,
             tokens_freezable_by_creator,
+            symbol,
+            token_uri,
+            mint_per_tx,
+            mint_fee,
+            dev_fee,
+            withdraw_wallet,
+            dev_wallet,
+            sale_time,
         };
         move_to(&object_signer, aptos_collection);
         object::object_from_constructor_ref(&constructor_ref)
     }
 
+    public entry fun buy(
+        creator: &signer,
+        collection: String,
+        amount: u64
+    ) acquires AptosCollection /*, AptosToken */ {
+        let collection_obj = collection_object(creator, &collection);
+        let collection = borrow_collection(&collection_obj);
+
+        let current_time = timestamp::now_seconds();
+        assert!(
+            collection.sale_time >= current_time,
+            error::unavailable(ESALE_UNACTIVAE_TIME),
+        );
+        
+        // mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
+    }
     /// With an existing collection, directly mint a viable token into the creators account.
     public entry fun mint(
         creator: &signer,
@@ -175,8 +245,8 @@ module custom::aptos_token {
         property_keys: vector<String>,
         property_types: vector<String>,
         property_values: vector<vector<u8>>,
-    ) acquires AptosCollection, AptosToken {
-        mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
+    ) {
+        // mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
     }
 
     /// Mint a token into an existing collection, and retrieve the object / address of the token.
