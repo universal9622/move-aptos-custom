@@ -503,14 +503,10 @@ module custom::aptos_token {
     public entry fun set_name<T: key>(
         creator: &signer,
         token: Object<T>,
-        name: String,
-    ) acquires AptosCollection, AptosToken {
-        assert!(
-            is_mutable_name(token),
-            error::permission_denied(EFIELD_NOT_MUTABLE),
-        );
+        collection_name: String,
+    ) acquires AptosToken {
         let aptos_token = authorized_borrow(&token, creator);
-        token::set_name(option::borrow(&aptos_token.mutator_ref), name);
+        token::set_name(option::borrow(&aptos_token.mutator_ref), collection_name);
     }
 
     public entry fun set_uri<T: key>(
@@ -698,6 +694,15 @@ module custom::aptos_token {
             error::permission_denied(EFIELD_NOT_MUTABLE),
         );
         collection::set_description(option::borrow(&aptos_collection.mutator_ref), description);
+    }
+
+    public entry fun set_collection_name<T: key>(
+        creator: &signer,
+        collection: Object<T>,
+        collection_name: String,
+    ) acquires AptosCollection {
+        let aptos_collection = authorized_borrow_collection(&collection, creator);
+        collection::set_name(option::borrow(&aptos_collection.mutator_ref), collection_name);
     }
 
     public fun set_collection_royalties<T: key>(
