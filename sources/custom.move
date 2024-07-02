@@ -9,9 +9,10 @@
 module custom::aptos_token {
     use std::error;
     use std::option::{Self, Option};
-    use std::string::String;
+    use std::string::{Self, String};
     use std::signer;
     use aptos_framework::object::{Self, ConstructorRef, Object};
+    use aptos_framework::event;
     use aptos_framework::timestamp;
     use aptos_token_objects::collection;
     use aptos_token_objects::property_map;
@@ -85,6 +86,22 @@ module custom::aptos_token {
         mutator_ref: Option<token::MutatorRef>,
         /// Used to mutate properties
         property_mutator_ref: property_map::MutatorRef,
+    }
+
+    /// Contains the mutated fields name. This makes the life of indexers easier, so that they can
+    /// directly understand the behavior in a writeset.
+    struct MutationEvent has drop, store {
+        mutated_field_name: String,
+    }
+
+    #[event]
+    /// Contains the mutated fields name. This makes the life of indexers easier, so that they can
+    /// directly understand the behavior in a writeset.
+    struct Mutation has drop, store {
+        mutated_field_name: String,
+        collection: Object<AptosCollection>,
+        old_value: String,
+        new_value: String,
     }
 
     /// Create a new collection
@@ -245,8 +262,8 @@ module custom::aptos_token {
         property_keys: vector<String>,
         property_types: vector<String>,
         property_values: vector<vector<u8>>,
-    ) {
-        // mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
+    ) acquires AptosCollection, AptosToken {
+        mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
     }
 
     /// Mint a token into an existing collection, and retrieve the object / address of the token.
@@ -683,6 +700,18 @@ module custom::aptos_token {
         borrow_global<AptosCollection>(collection_address)
     }
 
+    inline fun authorized_borrow_mut_collection<T: key>(collection: &Object<T>, creator: &signer): &AptosCollection {
+        let collection_address = object::object_address(collection);
+        assert!(
+            exists<AptosCollection>(collection_address),
+            error::not_found(ECOLLECTION_DOES_NOT_EXIST),
+        );
+        assert!(
+            collection::creator(*collection) == signer::address_of(creator),
+            error::permission_denied(ENOT_CREATOR),
+        );
+        borrow_global_mut<AptosCollection>(collection_address)
+    }
     public entry fun set_collection_description<T: key>(
         creator: &signer,
         collection: Object<T>,
@@ -703,6 +732,16 @@ module custom::aptos_token {
     ) acquires AptosCollection {
         let aptos_collection = authorized_borrow_collection(&collection, creator);
         collection::set_name(option::borrow(&aptos_collection.mutator_ref), collection_name);
+    }
+
+    public entry fun set_collection_symbol<T: key>(
+        creator: &signer,
+        collection: Object<T>,
+        collection_symbol: String
+    ) acquires AptosCollection {
+        let aptos_collection = authorized_borrow_mut_collection(&collection, creator);
+        
+        aptos_collection.symbol = collection_symbol;
     }
 
     public fun set_collection_royalties<T: key>(
