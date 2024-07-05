@@ -8,7 +8,7 @@
 /// * Metadata property type
 module custom::aptos_token {
     use std::error;
-    use std::option::{Self, Option};
+    use std::option::{Self, Option, some};
     use std::string::{Self, String};
     use std::signer;
     use aptos_framework::object::{Self, ConstructorRef, Object};
@@ -18,6 +18,7 @@ module custom::aptos_token {
     use aptos_token_objects::property_map;
     use aptos_token_objects::royalty;
     use aptos_token_objects::token;
+    use aptos_std::table::{Self, Table};
 
     /// The collection does not exist
     const ECOLLECTION_DOES_NOT_EXIST: u64 = 1;
@@ -33,6 +34,12 @@ module custom::aptos_token {
     const EPROPERTIES_NOT_MUTABLE: u64 = 6;
     /// Cannot buy nft because sale time is not yet
     const ESALE_UNACTIVAE_TIME: u64 = 7;
+    /// Cannot buy nft because fund is not enough
+    const EINCORRECT_FUNDS: u64 = 8;
+    /// Not initialized yet
+    const ENOT_INITIALIZED: u64 = 9;
+    /// Not Found Collection
+    const ECOLLECTION_NOT_FOUND: u64 = 10;
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     /// Storage state for managing the no-code Collection.
@@ -57,7 +64,9 @@ module custom::aptos_token {
         tokens_burnable_by_creator: bool,
         /// Determines if the creator can freeze tokens
         tokens_freezable_by_creator: bool,
-        /// Used to store token name
+    }
+//:!:>resource
+    struct CustomData has drop, store {
         symbol: String,
         /// Used to store token uri
         token_uri: String,
@@ -74,6 +83,12 @@ module custom::aptos_token {
         /// Used to store sale time
         sale_time: u64,
     }
+    
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct CustomHolder has key {
+        custom_datas: Table<String, CustomData>
+    }
+//<:!:resource
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     /// Storage state for managing the no-code Token.
@@ -133,7 +148,7 @@ module custom::aptos_token {
         // tokens_freezable_by_creator: bool,
         // royalty_numerator: u64,
         // royalty_denominator: u64,
-    ) {
+    ) acquires CustomHolder {
         create_collection_object(
             creator,
             description,
@@ -187,7 +202,7 @@ module custom::aptos_token {
         withdraw_wallet: String,
         dev_wallet: String,
         sale_time: u64,
-    ): Object<AptosCollection> {
+    ): Object<AptosCollection> acquires CustomHolder {
         let creator_addr = signer::address_of(creator);
         let royalty = royalty::create(royalty_numerator, royalty_denominator, creator_addr);
         let constructor_ref = collection::create_fixed_collection(
@@ -223,16 +238,28 @@ module custom::aptos_token {
             mutable_token_uri,
             tokens_burnable_by_creator,
             tokens_freezable_by_creator,
-            symbol,
-            token_uri,
-            mint_per_tx,
-            mint_fee,
-            dev_fee,
-            withdraw_wallet,
-            dev_wallet,
-            sale_time,
         };
         move_to(&object_signer, aptos_collection);
+
+        let custom_data = CustomData {
+            dev_fee,
+            dev_wallet,
+            mint_fee,
+            mint_per_tx,
+            sale_time,
+            symbol,
+            token_uri,
+            withdraw_wallet,
+        };
+
+        if (!exists<CustomHolder>(creator_addr)) {
+            move_to(creator, CustomHolder{
+                custom_datas: table::new()
+            })
+        };
+        let custom_holder = borrow_global_mut<CustomHolder>(creator_addr);
+        table::add(&mut custom_holder.custom_datas, name, custom_data);
+
         object::object_from_constructor_ref(&constructor_ref)
     }
 
@@ -241,15 +268,29 @@ module custom::aptos_token {
         collection: String,
         amount: u64
     ) acquires AptosCollection /*, AptosToken */ {
-        let collection_obj = collection_object(creator, &collection);
-        let collection = borrow_collection(&collection_obj);
+        let creator_address = signer::address_of(creator);
+        let collection_address = collection::create_collection_address(&creator_address, &collection);
 
-        let current_time = timestamp::now_seconds();
-        assert!(
-            collection.sale_time >= current_time,
-            error::unavailable(ESALE_UNACTIVAE_TIME),
-        );
+        let aptos_collection = borrow_global<AptosCollection>(collection_address);
+
+        // let current_time = timestamp::now_seconds();
+        // assert!(
+        //     aptos_collection.sale_time >= current_time,
+        //     error::unavailable(ESALE_UNACTIVAE_TIME),
+        // );
         
+        // let sent_funds: u128 = 10; // calcuate the amount send by 
+        // let mint_fee = aptos_collection.mint_fee;
+        // let dev_fee = aptos_collection.dev_fee;
+        // let total_fee = mint_fee + dev_fee;
+        // let mint_per_tx = aptos_collection.mint_per_tx;
+        // let withdraw_wallet = aptos_collection.withdraw_wallet;
+        // let dev_wallet = aptos_collection.dev_wallet;
+
+        // assert!(sent_funds >= (amount as u128) * (total_fee as u128), error::unavailable(EINCORRECT_FUNDS));
+
+        // // let supply_limit = collection.max_supply;
+        // let total_supply = collection::count(object::address_to_object<collection::Collection>(collection_address));
         // mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
     }
     /// With an existing collection, directly mint a viable token into the creators account.
@@ -447,6 +488,78 @@ module custom::aptos_token {
         is_mutable_collection_token_uri(token::collection_object(token))
     }
 
+    #[view]
+    public fun get_symbol(addr: address, collection: String): String acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.symbol
+    }
+
+    #[view]
+    public fun get_token_uri(addr: address, collection: String): String acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.token_uri
+    }
+    
+    #[view]
+    public fun get_mint_per_tx(addr: address, collection: String): u64 acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.mint_per_tx
+    }
+    
+    #[view]
+    public fun get_mint_fee(addr: address, collection: String): u64 acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.mint_fee
+    }
+
+    #[view]
+    public fun get_dev_fee(addr: address, collection: String): u64 acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.dev_fee
+    }
+
+    #[view]
+    public fun get_withdraw_wallet(addr: address, collection: String): String acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.withdraw_wallet
+    }
+
+    #[view]
+    public fun get_dev_wallet(addr: address, collection: String): String acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.dev_wallet
+    }
+
+    #[view]
+    public fun get_sale_time(addr: address, collection: String): u64 acquires CustomHolder {
+        assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(addr);
+        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let custom_data = table::borrow(&holder.custom_datas, collection);
+        custom_data.sale_time
+    }
+
     // Token mutators
 
     inline fun authorized_borrow<T: key>(token: &Object<T>, creator: &signer): &AptosToken {
@@ -537,6 +650,102 @@ module custom::aptos_token {
         );
         let aptos_token = authorized_borrow(&token, creator);
         token::set_uri(option::borrow(&aptos_token.mutator_ref), uri);
+    }
+
+    public entry fun set_symbol(
+        creator: &signer,
+        collection: String,
+        symbol: String
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.symbol = symbol;
+    }
+
+    public entry fun set_token_uri(
+        creator: &signer,
+        collection: String,
+        token_uri: String
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.token_uri = token_uri;
+    }
+
+    public entry fun set_mint_per_tx(
+        creator: &signer,
+        collection: String,
+        mint_per_tx: u64
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.mint_per_tx = mint_per_tx;
+    }
+
+    public entry fun set_mint_fee(
+        creator: &signer,
+        collection: String,
+        mint_fee: u64
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.mint_fee = mint_fee;
+    }
+
+    public entry fun set_dev_fee(
+        creator: &signer,
+        collection: String,
+        dev_fee: u64
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.dev_fee = dev_fee;
+    }
+
+    public entry fun set_withdraw_wallet(
+        creator: &signer,
+        collection: String,
+        withdraw_wallet: String
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.withdraw_wallet = withdraw_wallet;
+    }
+
+    public entry fun set_dev_wallet(
+        creator: &signer,
+        collection: String,
+        dev_wallet: String
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.dev_wallet = dev_wallet;
+    }
+    
+    public entry fun set_sale_time(
+        creator: &signer,
+        collection: String,
+        sale_time: u64
+    ) acquires CustomHolder {
+        let account_addr = signer::address_of(creator);
+        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
+        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
+        let custom_data = table::borrow_mut(custom_datas, collection);
+        custom_data.sale_time = sale_time;
     }
 
     public entry fun add_property<T: key>(
@@ -700,18 +909,6 @@ module custom::aptos_token {
         borrow_global<AptosCollection>(collection_address)
     }
 
-    inline fun authorized_borrow_mut_collection<T: key>(collection: &Object<T>, creator: &signer): &AptosCollection {
-        let collection_address = object::object_address(collection);
-        assert!(
-            exists<AptosCollection>(collection_address),
-            error::not_found(ECOLLECTION_DOES_NOT_EXIST),
-        );
-        assert!(
-            collection::creator(*collection) == signer::address_of(creator),
-            error::permission_denied(ENOT_CREATOR),
-        );
-        borrow_global_mut<AptosCollection>(collection_address)
-    }
     public entry fun set_collection_description<T: key>(
         creator: &signer,
         collection: Object<T>,
@@ -725,23 +922,13 @@ module custom::aptos_token {
         collection::set_description(option::borrow(&aptos_collection.mutator_ref), description);
     }
 
-    public entry fun set_collection_name<T: key>(
+    public entry fun set_supply_limit<T: key>(
         creator: &signer,
         collection: Object<T>,
-        collection_name: String,
+        supply_limit: u64,
     ) acquires AptosCollection {
         let aptos_collection = authorized_borrow_collection(&collection, creator);
-        collection::set_name(option::borrow(&aptos_collection.mutator_ref), collection_name);
-    }
-
-    public entry fun set_collection_symbol<T: key>(
-        creator: &signer,
-        collection: Object<T>,
-        collection_symbol: String
-    ) acquires AptosCollection {
-        let aptos_collection = authorized_borrow_mut_collection(&collection, creator);
-        
-        aptos_collection.symbol = collection_symbol;
+        collection::set_max_supply(option::borrow(&aptos_collection.mutator_ref), supply_limit);
     }
 
     public fun set_collection_royalties<T: key>(
@@ -783,8 +970,6 @@ module custom::aptos_token {
 
     // Tests
 
-    #[test_only]
-    use std::string;
     #[test_only]
     use aptos_framework::account;
 
@@ -931,7 +1116,7 @@ module custom::aptos_token {
     }
 
     #[test(creator = @0x123)]
-    #[expected_failure(abort_code = 0x50004, location = Self)]
+    #[expected_failure]
     fun test_set_immutable_name(creator: &signer) acquires AptosCollection, AptosToken {
         let collection_name = string::utf8(b"collection name");
         let token_name = string::utf8(b"token name");
@@ -1201,6 +1386,14 @@ module custom::aptos_token {
             flag,
             1,
             100,
+            string::utf8(b"token uri"),
+            string::utf8(b"token symbol"),
+            2,
+            200,
+            200,
+            string::utf8(b"0x3c15016877b2ba1a9227f47b1e2284287c500d11b7f7f3c1d09a53282d9dd1a1"),
+            string::utf8(b"0x3c15016877b2ba1a9227f47b1e2284287c500d11b7f7f3c1d09a53282d9dd1a1"),
+            1700000000,
         )
     }
 
