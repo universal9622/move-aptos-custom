@@ -20,7 +20,6 @@ module custom::aptos_token {
     use aptos_token_objects::royalty;
     use aptos_token_objects::token;
     use aptos_token_objects::token::Token;
-    use aptos_std::table::{Self, Table};
     use aptos_framework::coin;
     use aptos_framework::account;
     use aptos_framework::account::SignerCapability;
@@ -47,6 +46,8 @@ module custom::aptos_token {
     const ENOT_INITIALIZED: u64 = 9;
     /// Not Found Collection
     const ECOLLECTION_NOT_FOUND: u64 = 10;
+    /// Not Authorized
+    const ENOT_AUTHORIZED: u64 = 11;
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     /// Storage state for managing the no-code Collection.
@@ -73,7 +74,10 @@ module custom::aptos_token {
         tokens_freezable_by_creator: bool,
     }
 //:!:>resource
-    struct CustomData has drop, store {
+    struct CustomData has drop, store, copy {
+        /// Used to store collection name separately
+        collection: String,
+        /// Used to store symbol
         symbol: String,
         /// Used to store token uri
         token_uri: String,
@@ -100,7 +104,7 @@ module custom::aptos_token {
     
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     struct CustomHolder has key {
-        custom_datas: Table<String, CustomData>
+        custom_data: CustomData
     }
 //<:!:resource
 
@@ -163,7 +167,7 @@ module custom::aptos_token {
         // tokens_freezable_by_creator: bool,
         // royalty_numerator: u64,
         // royalty_denominator: u64,
-    ) acquires CustomHolder {
+    ) {
         let resource_signer_cap = resource_account::retrieve_resource_account_cap(creator, @source_addr);
 
         // Store the token data id and the resource account's signer capability within the module, so we can programmatically
@@ -251,7 +255,7 @@ module custom::aptos_token {
         withdraw_wallet: address,
         dev_wallet: address,
         sale_time: u64,
-    ): Object<AptosCollection> acquires CustomHolder {
+    ): Object<AptosCollection> {
         let creator_addr = signer::address_of(creator);
         let royalty = royalty::create(royalty_numerator, royalty_denominator, creator_addr);
         let constructor_ref = collection::create_fixed_collection(
@@ -291,6 +295,7 @@ module custom::aptos_token {
         move_to(&object_signer, aptos_collection);
 
         let custom_data = CustomData {
+            collection: name,
             dev_fee,
             dev_wallet,
             mint_fee,
@@ -304,11 +309,9 @@ module custom::aptos_token {
 
         if (!exists<CustomHolder>(creator_addr)) {
             move_to(creator, CustomHolder{
-                custom_datas: table::new()
+                custom_data
             })
         };
-        let custom_holder = borrow_global_mut<CustomHolder>(creator_addr);
-        table::add(&mut custom_holder.custom_datas, name, custom_data);
 
         object::object_from_constructor_ref(&constructor_ref)
     }
@@ -322,18 +325,22 @@ module custom::aptos_token {
         };
         string::utf8(rlt)
     }
+
     public entry fun buy(
         user: &signer,
-        creator_address: address,
-        collection: String,
         amount: u64
     ) acquires AptosCollection, CustomHolder, AptosToken, ModuleData {
-        assert!(exists<CustomHolder>(creator_address), error::not_found(ENOT_INITIALIZED));
-        let holder = borrow_global<CustomHolder>(creator_address);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+        
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(resource_address);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
 
-        let collection_address = collection::create_collection_address(&creator_address, &collection);
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let collection_address = collection::create_collection_address(&resource_address, &collection);
 
         let current_time = timestamp::now_seconds();
         assert!(
@@ -343,12 +350,9 @@ module custom::aptos_token {
         
         coin::transfer<AptosCoin>(user, custom_data.withdraw_wallet, custom_data.mint_fee * amount);
         coin::transfer<AptosCoin>(user, custom_data.dev_wallet, custom_data.dev_fee * amount);
-        // // let supply_limit = collection.max_supply;
+        
         let total_supply_option: Option<u64> = collection::count(object::address_to_object<collection::Collection>(collection_address));
         let total_supply: u64 = option::extract(&mut total_supply_option);
-
-        let module_data = borrow_global_mut<ModuleData>(@custom);
-        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
         
         let index = 0;
         let description = string::utf8(b"This is custom token");
@@ -373,16 +377,22 @@ module custom::aptos_token {
 
     public entry fun reserve(
         user: &signer,
-        creator_address: address,
-        collection: String,
         amount: u64
-    ) acquires AptosCollection, CustomHolder, AptosToken {
-        assert!(exists<CustomHolder>(creator_address), error::not_found(ENOT_INITIALIZED));
-        let holder = borrow_global<CustomHolder>(creator_address);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
+    ) acquires AptosCollection, CustomHolder, AptosToken, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
 
-        let collection_address = collection::create_collection_address(&creator_address, &collection);
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+        
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let holder = borrow_global<CustomHolder>(resource_address);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
+        let collection_address = collection::create_collection_address(&resource_address, &collection);
 
         let current_time = timestamp::now_seconds();
         assert!(
@@ -390,7 +400,6 @@ module custom::aptos_token {
             error::unavailable(ESALE_UNACTIVAE_TIME),
         );
         
-        // // let supply_limit = collection.max_supply;
         let total_supply_option: Option<u64> = collection::count(object::address_to_object<collection::Collection>(collection_address));
         let total_supply: u64 = option::extract(&mut total_supply_option);
         
@@ -406,11 +415,15 @@ module custom::aptos_token {
 
             let new_token_uri = custom_data.token_uri;
             string::append(&mut new_token_uri, number);
-            mint_token_object(user, collection, description, new_token_name, new_token_uri, vector[], vector[], vector[]);
+            
+            let token = mint_token_object(&resource_signer, collection, description, new_token_name, new_token_uri, vector[], vector[], vector[]);
+            
+            object::transfer(&resource_signer, token, signer::address_of(user));
 
             index = index + 1;
         }
     }
+
     /// With an existing collection, directly mint a viable token into the creators account.
     public entry fun mint(
         creator: &signer,
@@ -421,8 +434,8 @@ module custom::aptos_token {
         property_keys: vector<String>,
         property_types: vector<String>,
         property_values: vector<vector<u8>>,
-    ) acquires AptosCollection, AptosToken {
-        mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
+    ) /*acquires AptosCollection, AptosToken*/ {
+        // mint_token_object(creator, collection, description, name, uri, property_keys, property_types, property_values);
     }
 
     /// Mint a token into an existing collection, and retrieve the object / address of the token.
@@ -607,97 +620,156 @@ module custom::aptos_token {
     }
 
     #[view]
-    public fun get_symbol(addr: address, collection: String): String acquires CustomHolder {
+    public fun get_symbol(): String acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.symbol
     }
 
     #[view]
-    public fun get_token_uri(addr: address, collection: String): String acquires CustomHolder {
+    public fun get_token_uri(): String acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.token_uri
     }
 
     #[view]
-    public fun get_total_supply(addr: address, collection: String): u64 acquires CustomHolder {
-        let collection_address = collection::create_collection_address(&addr, &collection);
+    public fun get_total_supply(): u64 acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
         
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
 
+        let collection = custom_data.collection;
+
+        let collection_address = collection::create_collection_address(&addr, &collection);
+        
         let total_supply_option: Option<u64> = collection::count(object::address_to_object<collection::Collection>(collection_address));
         let total_supply: u64 = option::extract(&mut total_supply_option);
         total_supply
     }
     
     #[view]
-    public fun get_mint_per_tx(addr: address, collection: String): u64 acquires CustomHolder {
+    public fun get_mint_per_tx(): u64 acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.mint_per_tx
     }
     
     #[view]
-    public fun get_mint_fee(addr: address, collection: String): u64 acquires CustomHolder {
+    public fun get_mint_fee(): u64 acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.mint_fee
     }
 
     #[view]
-    public fun get_dev_fee(addr: address, collection: String): u64 acquires CustomHolder {
+    public fun get_dev_fee(): u64 acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.dev_fee
     }
 
     #[view]
-    public fun get_withdraw_wallet(addr: address, collection: String): address acquires CustomHolder {
+    public fun get_withdraw_wallet(): address acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.withdraw_wallet
     }
 
     #[view]
-    public fun get_dev_wallet(addr: address, collection: String): address acquires CustomHolder {
+    public fun get_dev_wallet(): address acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.dev_wallet
     }
 
     #[view]
-    public fun get_sale_time(addr: address, collection: String): u64 acquires CustomHolder {
+    public fun get_sale_time(): u64 acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         custom_data.sale_time
     }
 
     #[view]
-    public fun sale_active(addr: address, collection: String): bool acquires CustomHolder {
+    public fun sale_active(): bool acquires CustomHolder, ModuleData {
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let addr = signer::address_of(&resource_signer);
+        
         assert!(exists<CustomHolder>(addr), error::not_found(ENOT_INITIALIZED));
         let holder = borrow_global<CustomHolder>(addr);
-        assert!(table::contains(&holder.custom_datas, collection), error::not_found(ECOLLECTION_NOT_FOUND));
-        let custom_data = table::borrow(&holder.custom_datas, collection);
+        let custom_data = holder.custom_data;
+        
+        let collection = custom_data.collection;
+
         (custom_data.sale_time <= timestamp::now_seconds())
     }
 
@@ -759,144 +831,207 @@ module custom::aptos_token {
     }
 
     public entry fun set_description<T: key>(
-        creator: &signer,
+        user: &signer,
         token: Object<T>,
         description: String,
-    ) acquires AptosCollection, AptosToken {
+    ) acquires AptosCollection, AptosToken, ModuleData {
         assert!(
             is_mutable_description(token),
             error::permission_denied(EFIELD_NOT_MUTABLE),
         );
-        let aptos_token = authorized_borrow(&token, creator);
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+        
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        
+        let aptos_token = authorized_borrow(&token, &resource_signer);
         token::set_description(option::borrow(&aptos_token.mutator_ref), description);
     }
 
     public entry fun set_name<T: key>(
-        creator: &signer,
+        user: &signer,
         token: Object<T>,
         collection_name: String,
-    ) acquires AptosToken {
-        let aptos_token = authorized_borrow(&token, creator);
+    ) acquires AptosToken, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+        
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+
+        let aptos_token = authorized_borrow(&token, &resource_signer);
         token::set_name(option::borrow(&aptos_token.mutator_ref), collection_name);
     }
 
     public entry fun set_uri<T: key>(
-        creator: &signer,
+        user: &signer,
         token: Object<T>,
         uri: String,
-    ) acquires AptosCollection, AptosToken {
+    ) acquires AptosCollection, AptosToken, ModuleData {
         assert!(
             is_mutable_uri(token),
             error::permission_denied(EFIELD_NOT_MUTABLE),
         );
-        let aptos_token = authorized_borrow(&token, creator);
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+        
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+
+        let aptos_token = authorized_borrow(&token, &resource_signer);
         token::set_uri(option::borrow(&aptos_token.mutator_ref), uri);
     }
 
     public entry fun set_symbol(
-        creator: &signer,
+        user: &signer,
         collection: String,
         symbol: String
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+        
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.symbol = symbol;
     }
 
     public entry fun set_token_uri(
-        creator: &signer,
+        user: &signer,
         collection: String,
         token_uri: String
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+        
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.token_uri = token_uri;
     }
 
     public entry fun set_mint_per_tx(
-        creator: &signer,
+        user: &signer,
         collection: String,
         mint_per_tx: u64
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.mint_per_tx = mint_per_tx;
     }
 
     public entry fun set_mint_fee(
-        creator: &signer,
+        user: &signer,
         collection: String,
         mint_fee: u64
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+        
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.mint_fee = mint_fee;
     }
 
     public entry fun set_dev_fee(
-        creator: &signer,
+        user: &signer,
         collection: String,
         dev_fee: u64
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.dev_fee = dev_fee;
     }
 
     public entry fun set_withdraw_wallet(
-        creator: &signer,
+        user: &signer,
         collection: String,
         withdraw_wallet: address
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+        
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.withdraw_wallet = withdraw_wallet;
     }
 
     public entry fun set_dev_wallet(
-        creator: &signer,
+        user: &signer,
         collection: String,
         dev_wallet: address
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.dev_wallet = dev_wallet;
     }
     
     public entry fun set_sale_time(
-        creator: &signer,
+        user: &signer,
         collection: String,
         sale_time: u64
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         custom_data.sale_time = sale_time;
     }
 
     public entry fun toggle_sale_active(
-        creator: &signer,
+        user: &signer,
         collection: String,
-    ) acquires CustomHolder {
-        let account_addr = signer::address_of(creator);
-        assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection);
+    ) acquires CustomHolder, ModuleData {
+        let caller_address = signer::address_of(user);
+        assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
+
+        let module_data = borrow_global_mut<ModuleData>(@custom);
+        let resource_signer = account::create_signer_with_capability(&module_data.signer_cap);
+        let resource_address = signer::address_of(&resource_signer);
+
+        assert!(exists<CustomHolder>(resource_address), error::not_found(ENOT_INITIALIZED));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(resource_address).custom_data;
         if ( custom_data.sale_time <= timestamp::now_seconds() ) {
             custom_data.sale_time = 18_446_744_073_709_551_615;
         }
@@ -1089,8 +1224,7 @@ module custom::aptos_token {
 
         let account_addr = signer::address_of(creator);
         assert!(exists<CustomHolder>(account_addr), error::not_found(ENOT_INITIALIZED));
-        let custom_datas = &mut borrow_global_mut<CustomHolder>(account_addr).custom_datas;
-        let custom_data = table::borrow_mut(custom_datas, collection::name(collection));
+        let custom_data = &mut borrow_global_mut<CustomHolder>(account_addr).custom_data;
         custom_data.supply_limit = supply_limit;
     }
 

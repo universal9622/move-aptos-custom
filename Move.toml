@@ -8,6 +8,7 @@ std = "0x1"
 aptos_std = "0x1"
 aptos_framework = "0x1"
 aptos_token_objects = "0x4"
+admin_addr = "0x3c15016877b2ba1a9227f47b1e2284287c500d11b7f7f3c1d09a53282d9dd1a1"
 
 [dev-addresses]
 
