@@ -177,9 +177,9 @@ module custom::aptos_token {
         });
         create_collection_object(
             creator,
-            string::utf8(b"DJ Description"),
+            string::utf8(b"My Description"),
             5,
-            string::utf8(b"DJ Collection"),
+            string::utf8(b"My Collection"),
             string::utf8(b"https://arweave.net/dZBQn3edH9XsTsw3dxVTVQle811Vq4nPlO28AvN6osE"),
             true,
             true,
@@ -192,13 +192,13 @@ module custom::aptos_token {
             true,
             0,
             1,
-            string::utf8(b"djcol"),
+            string::utf8(b"mycol"),
             string::utf8(b"https://ipfs.io/ipfs/bafybeigrytqzipxv4sekrofqfz4etp4f6c7a3bssi5oyerccmeksm4czku/"),
             3,
             100,
             100,
-            @0xed018ed192b4735c2cda4ef7720ff7784ee5f599be229968ac3c93df739413ab,
-            @0xed018ed192b4735c2cda4ef7720ff7784ee5f599be229968ac3c93df739413ab,
+            @withdraw_wallet,
+            @dev_wallet,
             1234,
         );
 
@@ -475,7 +475,7 @@ module custom::aptos_token {
     }
 
     /// With an existing collection, directly mint a soul bound token into the recipient's account.
-    public entry fun mint_soul_bound(
+    public fun mint_soul_bound(
         creator: &signer,
         collection: String,
         description: String,
@@ -588,33 +588,27 @@ module custom::aptos_token {
         borrow_global<AptosToken>(token_address)
     }
 
-    #[view]
     public fun are_properties_mutable<T: key>(token: Object<T>): bool acquires AptosCollection {
         let collection = token::collection_object(token);
         borrow_collection(&collection).mutable_token_properties
     }
 
-    #[view]
     public fun is_burnable<T: key>(token: Object<T>): bool acquires AptosToken {
         option::is_some(&borrow(&token).burn_ref)
     }
 
-    #[view]
     public fun is_freezable_by_creator<T: key>(token: Object<T>): bool acquires AptosCollection {
         are_collection_tokens_freezable(token::collection_object(token))
     }
 
-    #[view]
     public fun is_mutable_description<T: key>(token: Object<T>): bool acquires AptosCollection {
         is_mutable_collection_token_description(token::collection_object(token))
     }
 
-    #[view]
     public fun is_mutable_name<T: key>(token: Object<T>): bool acquires AptosCollection {
         is_mutable_collection_token_name(token::collection_object(token))
     }
 
-    #[view]
     public fun is_mutable_uri<T: key>(token: Object<T>): bool acquires AptosCollection {
         is_mutable_collection_token_uri(token::collection_object(token))
     }
@@ -789,7 +783,7 @@ module custom::aptos_token {
         borrow_global<AptosToken>(token_address)
     }
 
-    public entry fun burn<T: key>(creator: &signer, token: Object<T>) acquires AptosToken {
+    public fun burn<T: key>(creator: &signer, token: Object<T>) acquires AptosToken {
         let aptos_token = authorized_borrow(&token, creator);
         assert!(
             option::is_some(&aptos_token.burn_ref),
@@ -807,7 +801,7 @@ module custom::aptos_token {
         token::burn(option::extract(&mut burn_ref));
     }
 
-    public entry fun freeze_transfer<T: key>(creator: &signer, token: Object<T>) acquires AptosCollection, AptosToken {
+    public fun freeze_transfer<T: key>(creator: &signer, token: Object<T>) acquires AptosCollection, AptosToken {
         let aptos_token = authorized_borrow(&token, creator);
         assert!(
             are_collection_tokens_freezable(token::collection_object(token))
@@ -817,7 +811,7 @@ module custom::aptos_token {
         object::disable_ungated_transfer(option::borrow(&aptos_token.transfer_ref));
     }
 
-    public entry fun unfreeze_transfer<T: key>(
+    public fun unfreeze_transfer<T: key>(
         creator: &signer,
         token: Object<T>
     ) acquires AptosCollection, AptosToken {
@@ -849,7 +843,7 @@ module custom::aptos_token {
         token::set_description(option::borrow(&aptos_token.mutator_ref), description);
     }
 
-    public entry fun set_name<T: key>(
+    public fun set_name<T: key>(
         user: &signer,
         token: Object<T>,
         collection_name: String,
@@ -885,7 +879,6 @@ module custom::aptos_token {
 
     public entry fun set_symbol(
         user: &signer,
-        collection: String,
         symbol: String
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -902,7 +895,6 @@ module custom::aptos_token {
 
     public entry fun set_token_uri(
         user: &signer,
-        collection: String,
         token_uri: String
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -919,7 +911,6 @@ module custom::aptos_token {
 
     public entry fun set_mint_per_tx(
         user: &signer,
-        collection: String,
         mint_per_tx: u64
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -936,7 +927,6 @@ module custom::aptos_token {
 
     public entry fun set_mint_fee(
         user: &signer,
-        collection: String,
         mint_fee: u64
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -953,7 +943,6 @@ module custom::aptos_token {
 
     public entry fun set_dev_fee(
         user: &signer,
-        collection: String,
         dev_fee: u64
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -970,7 +959,6 @@ module custom::aptos_token {
 
     public entry fun set_withdraw_wallet(
         user: &signer,
-        collection: String,
         withdraw_wallet: address
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -987,7 +975,6 @@ module custom::aptos_token {
 
     public entry fun set_dev_wallet(
         user: &signer,
-        collection: String,
         dev_wallet: address
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -1004,7 +991,6 @@ module custom::aptos_token {
     
     public entry fun set_sale_time(
         user: &signer,
-        collection: String,
         sale_time: u64
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
@@ -1021,7 +1007,6 @@ module custom::aptos_token {
 
     public entry fun toggle_sale_active(
         user: &signer,
-        collection: String,
     ) acquires CustomHolder, ModuleData {
         let caller_address = signer::address_of(user);
         assert!(caller_address == @admin_addr, error::permission_denied(ENOT_AUTHORIZED));
@@ -1040,7 +1025,7 @@ module custom::aptos_token {
         }
     }
 
-    public entry fun add_property<T: key>(
+    public fun add_property<T: key>(
         creator: &signer,
         token: Object<T>,
         key: String,
@@ -1056,7 +1041,7 @@ module custom::aptos_token {
         property_map::add(&aptos_token.property_mutator_ref, key, type, value);
     }
 
-    public entry fun add_typed_property<T: key, V: drop>(
+    public fun add_typed_property<T: key, V: drop>(
         creator: &signer,
         token: Object<T>,
         key: String,
@@ -1071,7 +1056,7 @@ module custom::aptos_token {
         property_map::add_typed(&aptos_token.property_mutator_ref, key, value);
     }
 
-    public entry fun remove_property<T: key>(
+    public fun remove_property<T: key>(
         creator: &signer,
         token: Object<T>,
         key: String,
@@ -1085,7 +1070,7 @@ module custom::aptos_token {
         property_map::remove(&aptos_token.property_mutator_ref, &key);
     }
 
-    public entry fun update_property<T: key>(
+    public fun update_property<T: key>(
         creator: &signer,
         token: Object<T>,
         key: String,
@@ -1101,7 +1086,7 @@ module custom::aptos_token {
         property_map::update(&aptos_token.property_mutator_ref, &key, type, value);
     }
 
-    public entry fun update_typed_property<T: key, V: drop>(
+    public fun update_typed_property<T: key, V: drop>(
         creator: &signer,
         token: Object<T>,
         key: String,
@@ -1241,7 +1226,7 @@ module custom::aptos_token {
         royalty::update(option::borrow(&aptos_collection.royalty_mutator_ref), royalty);
     }
 
-    entry fun set_collection_royalties_call<T: key>(
+    fun set_collection_royalties_call<T: key>(
         creator: &signer,
         collection: Object<T>,
         royalty_numerator: u64,
